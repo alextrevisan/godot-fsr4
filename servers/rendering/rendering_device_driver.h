@@ -816,6 +816,11 @@ public:
 
 	typedef void (*DriverCallback)(RenderingDeviceDriver *p_driver, CommandBufferID p_command_buffer, void *p_userdata);
 
+	// Returns the underlying native command-list handle for a command buffer received inside a
+	// DriverCallback (an ID3D12GraphicsCommandList* on Direct3D 12). Returns 0 if the driver does
+	// not expose one. Used for interop with external native APIs (e.g. the AMD FidelityFX runtime).
+	virtual uint64_t command_buffer_get_native_handle(CommandBufferID p_command_buffer) { return 0; }
+
 	/*****************/
 	/**** QUERIES ****/
 	/*****************/

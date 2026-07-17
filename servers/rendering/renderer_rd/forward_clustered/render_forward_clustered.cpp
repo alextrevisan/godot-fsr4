@@ -31,6 +31,7 @@
 #include "render_forward_clustered.h"
 
 #include "core/config/project_settings.h"
+#include "servers/rendering/renderer_rd/effects/fsr4.h"
 #include "servers/rendering/renderer_rd/environment/fog.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
@@ -90,6 +91,14 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(Rende
 	}
 }
 
+#ifdef FSR4_ENABLED
+void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr4(RendererRD::FSR4Effect *p_effect) {
+	if (fsr4_context == nullptr) {
+		fsr4_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
+	}
+}
+#endif
+
 #ifdef METAL_MFXTEMPORAL_ENABLED
 bool RenderForwardClustered::RenderBufferDataForwardClustered::ensure_mfx_temporal(RendererRD::MFXTemporalEffect *p_effect) {
 	if (mfx_temporal_context == nullptr) {
@@ -128,6 +137,13 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 		memdelete(fsr2_context);
 		fsr2_context = nullptr;
 	}
+
+#ifdef FSR4_ENABLED
+	if (fsr4_context) {
+		memdelete(fsr4_context);
+		fsr4_context = nullptr;
+	}
+#endif
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
 	if (mfx_temporal_context) {
@@ -1785,12 +1801,22 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	enum {
 		SCALE_NONE,
 		SCALE_FSR2,
+		SCALE_FSR4,
 		SCALE_MFX,
 	} scale_type = SCALE_NONE;
 
 	switch (rb->get_scaling_3d_mode()) {
 		case RSE::VIEWPORT_SCALING_3D_MODE_FSR2:
 			scale_type = SCALE_FSR2;
+			break;
+		case RSE::VIEWPORT_SCALING_3D_MODE_FSR4:
+#ifdef FSR4_ENABLED
+			// Use the real FSR 4 path only when the runtime/hardware supports it; otherwise fall
+			// back to FSR 2, which shares the same temporal inputs.
+			scale_type = RendererRD::FSR4Effect::is_supported() ? SCALE_FSR4 : SCALE_FSR2;
+#else
+			scale_type = SCALE_FSR2;
+#endif
 			break;
 		case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
 #ifdef METAL_MFXTEMPORAL_ENABLED
@@ -2228,7 +2254,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		RD::get_singleton()->draw_command_end_label();
 
 		if (using_motion_pass) {
-			if (scale_type == SCALE_MFX) {
+			if (scale_type == SCALE_MFX || scale_type == SCALE_FSR4) {
+				// FSR 4 and MetalFX are stock external upscalers that lack Godot's in-shader
+				// "derive invalid motion vectors" path, so resolve the sentinel (-1,-1) motion
+				// vectors into real camera-reprojected vectors in-place before the upscale.
 				motion_vectors_store->process(rb,
 						p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform,
 						p_render_data->scene_data->prev_cam_projection, p_render_data->scene_data->prev_cam_transform);
@@ -2506,6 +2535,45 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 
 			RD::get_singleton()->draw_command_end_label();
+#ifdef FSR4_ENABLED
+		} else if (scale_type == SCALE_FSR4) {
+			rb_data->ensure_fsr4(fsr4_effect);
+
+			RID exposure;
+			if (RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes)) {
+				exposure = luminance->get_current_luminance_buffer(rb);
+			}
+
+			RD::get_singleton()->draw_command_begin_label("FSR4");
+			RENDER_TIMESTAMP("FSR4");
+
+			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+				real_t fov = p_render_data->scene_data->cam_projection.get_fov();
+				real_t aspect = p_render_data->scene_data->cam_projection.get_aspect();
+				real_t fovy = p_render_data->scene_data->cam_projection.get_fovy(fov, 1.0 / aspect);
+				Vector2 jitter = p_render_data->scene_data->taa_jitter * Vector2(rb->get_internal_size()) * 0.5f;
+				RendererRD::FSR4Effect::Parameters params;
+				params.context = rb_data->get_fsr4_context();
+				params.internal_size = rb->get_internal_size();
+				params.target_size = rb->get_target_size();
+				params.sharpness = CLAMP(1.0f - (rb->get_fsr_sharpness() / 2.0f), 0.0f, 1.0f);
+				params.color = rb->get_internal_texture(v);
+				params.depth = rb->get_depth_texture(v);
+				params.velocity = rb->get_velocity_buffer(false, v);
+				params.reactive = rb->get_internal_texture_reactive(v);
+				params.exposure = exposure;
+				params.output = rb->get_upscaled_texture(v);
+				params.z_near = p_render_data->scene_data->z_near;
+				params.z_far = p_render_data->scene_data->z_far;
+				params.fovy = fovy;
+				params.jitter = jitter;
+				params.delta_time = float(time_step);
+				params.reset_accumulation = false;
+				fsr4_effect->upscale(params);
+			}
+
+			RD::get_singleton()->draw_command_end_label();
+#endif
 		} else if (scale_type == SCALE_MFX) {
 #ifdef METAL_MFXTEMPORAL_ENABLED
 			bool reset = rb_data->ensure_mfx_temporal(mfx_temporal_effect);
@@ -5243,6 +5311,18 @@ RenderForwardClustered::RenderForwardClustered() {
 	motion_vectors_store = memnew(RendererRD::MotionVectorsStore);
 	mfx_temporal_effect = memnew(RendererRD::MFXTemporalEffect);
 #endif
+#ifdef FSR4_ENABLED
+	fsr4_effect = memnew(RendererRD::FSR4Effect);
+	// motion_vectors_store resolves Godot's sentinel motion vectors for stock external upscalers.
+	// It is shared with MetalFX Temporal (a mutually exclusive platform), so create it only if that
+	// path hasn't already.
+	if (motion_vectors_store == nullptr) {
+		motion_vectors_store = memnew(RendererRD::MotionVectorsStore);
+	}
+	// Probe once up front so the availability result is logged and cached before any viewport
+	// selects the FSR 4 scaling mode.
+	RendererRD::FSR4Effect::is_supported();
+#endif
 }
 
 RenderForwardClustered::~RenderForwardClustered() {
@@ -5260,6 +5340,18 @@ RenderForwardClustered::~RenderForwardClustered() {
 		memdelete(fsr2_effect);
 		fsr2_effect = nullptr;
 	}
+
+#ifdef FSR4_ENABLED
+	if (fsr4_effect) {
+		memdelete(fsr4_effect);
+		fsr4_effect = nullptr;
+	}
+	// motion_vectors_store is shared with MetalFX Temporal; null-guarded so it is freed once.
+	if (motion_vectors_store) {
+		memdelete(motion_vectors_store);
+		motion_vectors_store = nullptr;
+	}
+#endif
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
 	if (mfx_temporal_effect) {
