@@ -2642,6 +2642,11 @@ bool RenderingDeviceDriverD3D12::command_buffer_begin_secondary(CommandBufferID 
 	return true;
 }
 
+uint64_t RenderingDeviceDriverD3D12::command_buffer_get_native_handle(CommandBufferID p_command_buffer) {
+	const CommandBufferInfo *cmd_buf_info = (const CommandBufferInfo *)p_command_buffer.id;
+	return (uint64_t)cmd_buf_info->cmd_list.Get();
+}
+
 void RenderingDeviceDriverD3D12::command_buffer_end(CommandBufferID p_cmd_buffer) {
 	CommandBufferInfo *cmd_buf_info = (CommandBufferInfo *)p_cmd_buffer.id;
 	HRESULT res = cmd_buf_info->cmd_list->Close();

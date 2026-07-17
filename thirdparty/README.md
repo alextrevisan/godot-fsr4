@@ -47,6 +47,20 @@ Patches:
 - `0002-godot-fsr2-options.patch` ([GH-81197](https://github.com/godotengine/godot/pull/81197))
 
 
+## amd-fsr4
+
+- Upstream: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+- Version: 2.3.0 (60f4ea81909200d8542eca14dccb2628b763a9a3, 2026)
+- License: MIT
+
+Files extracted from upstream source (FfxApi headers only; the FSR 4 runtime is provided by the
+AMD driver's `amd_fidelityfx_dx12.dll`, so no binary is vendored):
+
+- `api/include/ffx_api.h`, `api/include/ffx_api_types.h` and `api/include/dx12/ffx_api_dx12.h`
+- `upscalers/include/ffx_upscale.h`
+- `LICENSE.txt`
+
+
 ## angle
 
 - Upstream: https://chromium.googlesource.com/angle/angle/

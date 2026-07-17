@@ -515,6 +515,22 @@ def configure_msvc(env: "SConsEnvironment"):
         LIBS += ["dxgi", "dxguid"]
         LIBS += ["version"]  # Mesa dependency.
 
+    if env["fsr4"]:
+        # FSR 4 (AMD FidelityFX) is Direct3D 12 only, and its runtime is provided by the AMD driver
+        # (amd_fidelityfx_dx12.dll) — no binary is redistributed. Only the FfxApi headers are needed
+        # at build time; they are vendored in thirdparty/amd-fsr4.
+        if not env["d3d12"]:
+            print_error("The `fsr4` option requires `d3d12=yes` (AMD FSR 4 is Direct3D 12 only).")
+            sys.exit(255)
+
+        env.AppendUnique(CPPDEFINES=["FSR4_ENABLED"])
+        env.Prepend(
+            CPPPATH=[
+                "#thirdparty/amd-fsr4/api/include",
+                "#thirdparty/amd-fsr4/upscalers/include",
+            ]
+        )
+
         # PIX
         if env["arch"] not in ["x86_64", "arm64"] or env["pix_path"] == "" or not os.path.exists(env["pix_path"]):
             env["use_pix"] = False

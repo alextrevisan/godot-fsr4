@@ -159,7 +159,7 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
 				WARN_PRINT_ONCE("MetalFX and FSR upscaling are not supported in the Compatibility renderer. Falling back to bilinear scaling.");
 			}
 
-			if ((scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR || scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2 || scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL) && OS::get_singleton()->get_current_rendering_method() == "mobile") {
+			if ((scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR || scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2 || scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR4 || scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL) && OS::get_singleton()->get_current_rendering_method() == "mobile") {
 				scaling_3d_mode = RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
 				scaling_type = RSE::scaling_3d_mode_type(scaling_3d_mode);
 				WARN_PRINT_ONCE("MetalFX temporal and FSR upscaling are not supported in the Mobile renderer. Falling back to bilinear scaling.");
@@ -243,6 +243,7 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
 				case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
 				case RSE::VIEWPORT_SCALING_3D_MODE_FSR:
 				case RSE::VIEWPORT_SCALING_3D_MODE_FSR2:
+				case RSE::VIEWPORT_SCALING_3D_MODE_FSR4:
 					target_width = p_viewport->size.width;
 					target_height = p_viewport->size.height;
 					render_width = MAX(target_width * scaling_3d_scale, 1.0); // target_width / (target_width * scaling)
@@ -1030,6 +1031,10 @@ void RendererViewport::viewport_set_scaling_3d_mode(RID p_viewport, RSE::Viewpor
 		}
 		if (p_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2) {
 			WARN_PRINT_ONCE_ED("FSR2 3D scaling is only available when using the Forward+ renderer.");
+			return;
+		}
+		if (p_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR4) {
+			WARN_PRINT_ONCE_ED("FSR4 3D scaling is only available when using the Forward+ renderer.");
 			return;
 		}
 		if (p_mode == RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL) {
