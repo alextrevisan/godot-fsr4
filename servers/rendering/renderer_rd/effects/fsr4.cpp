@@ -166,6 +166,23 @@ ID3D12Device *get_d3d12_device() {
 	return reinterpret_cast<ID3D12Device *>(rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE));
 }
 
+// Whether the device meets the minimum capabilities for the FSR upscaler providers. The FfxApi
+// upscalers need Resource Heap Tier 2; some weak/old GPUs (e.g. Pascal laptop parts like the GeForce
+// MX150) only expose Tier 1 and crash inside the driver when the FSR shaders run. Treating them as
+// unsupported makes the viewport fall back to Godot's built-in FSR 2 instead of crashing.
+bool device_supports_fsr(ID3D12Device *device) {
+	if (device == nullptr) {
+		return false;
+	}
+	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+	if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+		if (options.ResourceHeapTier < D3D12_RESOURCE_HEAP_TIER_2) {
+			return false;
+		}
+	}
+	return true;
+}
+
 // Per-dispatch payload handed to the render-graph driver callback. Allocated on upscale(), freed
 // inside the callback after the dispatch is recorded.
 struct FSR4DispatchData {
@@ -254,7 +271,7 @@ Vector<FSR4Effect::Provider> FSR4Effect::get_providers() {
 	}
 
 	ID3D12Device *device = get_d3d12_device();
-	if (device == nullptr) {
+	if (device == nullptr || !device_supports_fsr(device)) {
 		return fsr4_providers;
 	}
 	FfxRuntime *rt = get_ffx_runtime();
@@ -323,6 +340,11 @@ bool FSR4Effect::is_supported() {
 	ID3D12Device *device = get_d3d12_device();
 	if (device == nullptr) {
 		print_verbose("FSR 4: not using the Direct3D 12 backend; FSR 4 is unavailable.");
+		return false;
+	}
+
+	if (!device_supports_fsr(device)) {
+		print_line("FSR 4: this GPU only supports Direct3D 12 Resource Heap Tier 1; FSR 4 is disabled, falling back to FSR 2.");
 		return false;
 	}
 
