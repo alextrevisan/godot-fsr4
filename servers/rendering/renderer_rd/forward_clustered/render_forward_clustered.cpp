@@ -93,7 +93,12 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(Rende
 
 #ifdef FSR4_ENABLED
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr4(RendererRD::FSR4Effect *p_effect) {
-	const uint64_t version_id = (uint64_t)render_buffers->get_scaling_3d_fsr4_provider();
+	uint64_t version_id = (uint64_t)render_buffers->get_scaling_3d_fsr4_provider();
+	if (version_id == 0) {
+		// No explicit per-viewport provider; fall back to the project-wide family preference
+		// (rendering/scaling_3d/fsr4_provider), resolved to a concrete provider on this device.
+		version_id = RendererRD::FSR4Effect::resolve_provider_for_family(GLOBAL_GET_CACHED(int, "rendering/scaling_3d/fsr4_provider"));
+	}
 	// Rebuild the context if the requested provider version changed (e.g. the game switched the
 	// upscaler in its settings). Size changes already recreate the buffer data, and with it the context.
 	if (fsr4_context != nullptr && fsr4_context->version_id != version_id) {

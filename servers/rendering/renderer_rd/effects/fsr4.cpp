@@ -300,6 +300,20 @@ Vector<FSR4Effect::Provider> FSR4Effect::get_providers() {
 	return fsr4_providers;
 }
 
+uint64_t FSR4Effect::resolve_provider_for_family(int p_family) {
+	if (p_family == 0) {
+		return 0; // Auto: let the loader pick its default provider.
+	}
+	// Provider names look like "4.1.0" / "3.1.3" / "2.3.2"; match on the major version. The list is
+	// ordered newest-first, so the first match is the newest provider in that family.
+	for (const Provider &provider : get_providers()) {
+		if (provider.name.get_slicec('.', 0).to_int() == p_family) {
+			return provider.version_id;
+		}
+	}
+	return 0; // Family unavailable on this device; fall back to the loader default.
+}
+
 bool FSR4Effect::is_supported() {
 	if (fsr4_supported != -1) {
 		return fsr4_supported == 1;

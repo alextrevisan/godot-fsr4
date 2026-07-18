@@ -95,6 +95,11 @@ public:
 	// Cached after the first successful query.
 	static Vector<Provider> get_providers();
 
+	// Resolves a provider family (major version: 4 = FSR 4.x, 3 = FSR 3.x, 2 = FSR 2.x; 0 = auto) to
+	// the version id of the newest available provider in that family, or 0 when it is auto or the
+	// family is unavailable on this device (so the loader falls back to its default).
+	static uint64_t resolve_provider_for_family(int p_family);
+
 	FSR4Effect();
 	~FSR4Effect();
 
