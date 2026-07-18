@@ -293,6 +293,7 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
 			rb_config.set_msaa_3d(msaa_3d);
 			rb_config.set_screen_space_aa(p_viewport->screen_space_aa);
 			rb_config.set_fsr_sharpness(p_viewport->fsr_sharpness);
+			rb_config.set_scaling_3d_fsr4_provider(p_viewport->scaling_3d_fsr4_provider);
 			rb_config.set_texture_mipmap_bias(texture_mipmap_bias);
 			rb_config.set_anisotropic_filtering_level(p_viewport->anisotropic_filtering_level);
 			rb_config.set_use_taa(use_taa);
@@ -1067,6 +1068,14 @@ void RendererViewport::viewport_set_fsr_sharpness(RID p_viewport, float p_sharpn
 	ERR_FAIL_NULL(viewport);
 
 	viewport->fsr_sharpness = p_sharpness;
+	_configure_3d_render_buffers(viewport);
+}
+
+void RendererViewport::viewport_set_scaling_3d_fsr4_provider(RID p_viewport, int64_t p_version_id) {
+	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
+	ERR_FAIL_NULL(viewport);
+
+	viewport->scaling_3d_fsr4_provider = p_version_id;
 	_configure_3d_render_buffers(viewport);
 }
 

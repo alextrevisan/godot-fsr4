@@ -37,6 +37,10 @@
 #include "servers/rendering/renderer_rd/storage_rd/particles_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 
+#ifdef FSR4_ENABLED
+#include "servers/rendering/renderer_rd/effects/fsr4.h"
+#endif
+
 using namespace RendererRD;
 
 Utilities *Utilities::singleton = nullptr;
@@ -326,6 +330,19 @@ RenderingDeviceEnums::DeviceType Utilities::get_video_adapter_type() const {
 
 String Utilities::get_video_adapter_api_version() const {
 	return RenderingDevice::get_singleton()->get_device_api_version();
+}
+
+TypedArray<Dictionary> Utilities::get_fsr4_providers() const {
+	TypedArray<Dictionary> providers;
+#ifdef FSR4_ENABLED
+	for (const RendererRD::FSR4Effect::Provider &provider : RendererRD::FSR4Effect::get_providers()) {
+		Dictionary dict;
+		dict["name"] = provider.name;
+		dict["id"] = (int64_t)provider.version_id;
+		providers.push_back(dict);
+	}
+#endif
+	return providers;
 }
 
 Size2i Utilities::get_maximum_viewport_size() const {

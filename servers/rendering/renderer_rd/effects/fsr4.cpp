@@ -71,6 +71,10 @@ FfxRuntime ffx_runtime;
 int fsr4_supported = -1;
 String fsr4_provider_version;
 
+// Cached list of FfxApi upscaler providers available on this device (enumerated once).
+bool fsr4_providers_enumerated = false;
+Vector<FSR4Effect::Provider> fsr4_providers;
+
 // Routes FidelityFX runtime messages into Godot's log.
 void ffx_message_callback(uint32_t p_type, const wchar_t *p_message) {
 	String msg = String(p_message);
@@ -151,6 +155,23 @@ ID3D12Device *get_d3d12_device() {
 	RenderingDevice *rd = RenderingDevice::get_singleton();
 	ERR_FAIL_NULL_V(rd, nullptr);
 	return reinterpret_cast<ID3D12Device *>(rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE));
+}
+
+// Whether the device meets the minimum capabilities for the FSR upscaler providers. The FfxApi
+// upscalers need Resource Heap Tier 2; some weak/old GPUs (e.g. Pascal laptop parts like the GeForce
+// MX150) only expose Tier 1 and crash inside the driver when the FSR shaders run. Treating them as
+// unsupported makes the viewport fall back to Godot's built-in FSR 2 instead of crashing.
+bool device_supports_fsr(ID3D12Device *device) {
+	if (device == nullptr) {
+		return false;
+	}
+	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+	if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+		if (options.ResourceHeapTier < D3D12_RESOURCE_HEAP_TIER_2) {
+			return false;
+		}
+	}
+	return true;
 }
 
 // Per-dispatch payload handed to the render-graph driver callback. Allocated on upscale(), freed
@@ -235,6 +256,72 @@ void fsr4_dispatch_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriv
 
 } // namespace
 
+Vector<FSR4Effect::Provider> FSR4Effect::get_providers() {
+	if (fsr4_providers_enumerated) {
+		return fsr4_providers;
+	}
+
+	ID3D12Device *device = get_d3d12_device();
+	if (device == nullptr || !device_supports_fsr(device)) {
+		return fsr4_providers;
+	}
+	FfxRuntime *rt = get_ffx_runtime();
+	if (rt == nullptr) {
+		return fsr4_providers;
+	}
+
+	// First query returns the count; the second fills the id + name arrays. The loader filters the
+	// list to the providers usable on this device (the query takes the D3D12 device).
+	uint64_t version_count = 0;
+	ffxQueryDescGetVersions versions_query = {};
+	versions_query.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+	versions_query.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+	versions_query.device = device;
+	versions_query.outputCount = &version_count;
+	if (rt->query(nullptr, &versions_query.header) != FFX_API_RETURN_OK || version_count == 0) {
+		return fsr4_providers;
+	}
+
+	const uint64_t max_versions = 16;
+	version_count = MIN(version_count, max_versions);
+	uint64_t version_ids[max_versions] = {};
+	const char *version_names[max_versions] = {};
+	versions_query.versionIds = version_ids;
+	versions_query.versionNames = version_names;
+	if (rt->query(nullptr, &versions_query.header) != FFX_API_RETURN_OK) {
+		return fsr4_providers;
+	}
+
+	for (uint64_t i = 0; i < version_count; i++) {
+		Provider provider;
+		provider.version_id = version_ids[i];
+		String name = version_names[i] != nullptr ? String(version_names[i]) : String();
+		name = name.strip_edges();
+		// The loader marks its default provider with a trailing "*"; drop it for a clean label.
+		if (name.ends_with("*")) {
+			name = name.trim_suffix("*").strip_edges();
+		}
+		provider.name = name.is_empty() ? String("FSR (unknown)") : name;
+		fsr4_providers.push_back(provider);
+	}
+	fsr4_providers_enumerated = true;
+	return fsr4_providers;
+}
+
+uint64_t FSR4Effect::resolve_provider_for_family(int p_family) {
+	if (p_family == 0) {
+		return 0; // Auto: let the loader pick its default provider.
+	}
+	// Provider names look like "4.1.0" / "3.1.3" / "2.3.2"; match on the major version. The list is
+	// ordered newest-first, so the first match is the newest provider in that family.
+	for (const Provider &provider : get_providers()) {
+		if (provider.name.get_slicec('.', 0).to_int() == p_family) {
+			return provider.version_id;
+		}
+	}
+	return 0; // Family unavailable on this device; fall back to the loader default.
+}
+
 bool FSR4Effect::is_supported() {
 	if (fsr4_supported != -1) {
 		return fsr4_supported == 1;
@@ -247,34 +334,24 @@ bool FSR4Effect::is_supported() {
 		return false;
 	}
 
+	if (!device_supports_fsr(device)) {
+		print_line("FSR 4: this GPU only supports Direct3D 12 Resource Heap Tier 1; FSR 4 is disabled, falling back to FSR 2.");
+		return false;
+	}
+
 	FfxRuntime *rt = get_ffx_runtime();
 	if (rt == nullptr) {
 		return false;
 	}
 
-	// Enumerate the upscaler provider versions available for this device.
-	{
-		uint64_t version_count = 0;
-		ffxQueryDescGetVersions versions_query = {};
-		versions_query.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-		versions_query.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-		versions_query.device = device;
-		versions_query.outputCount = &version_count;
-		if (rt->query(nullptr, &versions_query.header) == FFX_API_RETURN_OK && version_count > 0) {
-			const uint64_t max_versions = 16;
-			const char *version_names[max_versions] = {};
-			version_count = MIN(version_count, max_versions);
-			versions_query.versionNames = version_names;
-			if (rt->query(nullptr, &versions_query.header) == FFX_API_RETURN_OK) {
-				String joined;
-				for (uint64_t i = 0; i < version_count; i++) {
-					if (version_names[i] != nullptr) {
-						joined += (i > 0 ? String(", ") : String()) + String(version_names[i]);
-					}
-				}
-				print_line(vformat("FSR 4: available upscaler providers: %s", joined));
-			}
+	// Enumerate the upscaler provider versions available for this device (cached).
+	Vector<Provider> providers = get_providers();
+	if (!providers.is_empty()) {
+		String joined;
+		for (int i = 0; i < providers.size(); i++) {
+			joined += (i > 0 ? String(", ") : String()) + providers[i].name;
 		}
+		print_line(vformat("FSR 4: available upscaler providers: %s", joined));
 	}
 
 	// Prove the interop end-to-end: create and immediately destroy an upscale context on Godot's
@@ -300,11 +377,28 @@ bool FSR4Effect::is_supported() {
 
 	ffxQueryGetProviderVersion provider_query = {};
 	provider_query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-	if (rt->query(&context, &provider_query.header) == FFX_API_RETURN_OK && provider_query.versionName != nullptr) {
-		fsr4_provider_version = String(provider_query.versionName);
+	if (rt->query(&context, &provider_query.header) == FFX_API_RETURN_OK) {
+		if (provider_query.versionName != nullptr) {
+			fsr4_provider_version = String(provider_query.versionName);
+		} else if (provider_query.versionId != 0) {
+			// The driver's provider query can omit the display name; recover it from the enumerated
+			// list by matching the version id.
+			for (const Provider &provider : providers) {
+				if (provider.version_id == provider_query.versionId) {
+					fsr4_provider_version = provider.name;
+					break;
+				}
+			}
+		}
 	}
 
 	rt->destroy_context(&context, nullptr);
+
+	// Some drivers report neither a name nor a usable id for the active provider; fall back to the
+	// loader's default, which is the first entry the enumeration returns.
+	if (fsr4_provider_version.is_empty() && !providers.is_empty()) {
+		fsr4_provider_version = providers[0].name;
+	}
 
 	fsr4_supported = 1;
 	print_line(vformat("FSR 4: supported on this device. Selected provider: %s", fsr4_provider_version.is_empty() ? String("(unknown)") : fsr4_provider_version));
@@ -319,7 +413,7 @@ FSR4Effect::FSR4Effect() {}
 
 FSR4Effect::~FSR4Effect() {}
 
-FSR4Context *FSR4Effect::create_context(Size2i p_internal_size, Size2i p_target_size) {
+FSR4Context *FSR4Effect::create_context(Size2i p_internal_size, Size2i p_target_size, uint64_t p_version_id) {
 	FfxRuntime *rt = get_ffx_runtime();
 	ERR_FAIL_NULL_V(rt, nullptr);
 
@@ -329,6 +423,15 @@ FSR4Context *FSR4Effect::create_context(Size2i p_internal_size, Size2i p_target_
 	ffxCreateBackendDX12Desc backend_desc = {};
 	backend_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
 	backend_desc.device = device;
+
+	// Optionally force a specific provider version enumerated by get_providers(). Chained after the
+	// backend desc; must outlive the create_context() call below (it does — same scope).
+	ffxOverrideVersion override_version = {};
+	if (p_version_id != 0) {
+		override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+		override_version.versionId = p_version_id;
+		backend_desc.header.pNext = &override_version.header;
+	}
 
 	ffxCreateContextDescUpscale upscale_desc = {};
 	upscale_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
@@ -352,7 +455,8 @@ FSR4Context *FSR4Effect::create_context(Size2i p_internal_size, Size2i p_target_
 	context->ffx_context = ffx_ctx;
 	context->internal_size = p_internal_size;
 	context->target_size = p_target_size;
-	print_verbose(vformat("FSR 4: context created (max render/upscale %dx%d).", p_target_size.width, p_target_size.height));
+	context->version_id = p_version_id;
+	print_verbose(vformat("FSR 4: context created (max render/upscale %dx%d, provider id %d).", p_target_size.width, p_target_size.height, (int64_t)p_version_id));
 	return context;
 }
 

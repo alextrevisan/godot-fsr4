@@ -114,6 +114,7 @@ public:
 	virtual String get_video_adapter_vendor() const override;
 	virtual RenderingDeviceEnums::DeviceType get_video_adapter_type() const override;
 	virtual String get_video_adapter_api_version() const override;
+	virtual TypedArray<Dictionary> get_fsr4_providers() const override;
 
 	virtual Size2i get_maximum_viewport_size() const override;
 	virtual uint32_t get_maximum_shader_varyings() const override;

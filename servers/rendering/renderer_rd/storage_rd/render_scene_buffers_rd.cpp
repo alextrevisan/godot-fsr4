@@ -167,6 +167,7 @@ void RenderSceneBuffersRD::configure(const RenderSceneBuffersConfiguration *p_co
 	screen_space_aa = p_config->get_screen_space_aa();
 
 	fsr_sharpness = p_config->get_fsr_sharpness();
+	scaling_3d_fsr4_provider = p_config->get_scaling_3d_fsr4_provider();
 	texture_mipmap_bias = p_config->get_texture_mipmap_bias();
 	anisotropic_filtering_level = p_config->get_anisotropic_filtering_level();
 	use_taa = p_config->get_use_taa();
@@ -221,6 +222,7 @@ void RenderSceneBuffersRD::configure_for_reflections(const Size2i p_reflection_s
 	render_target = RID();
 	scaling_3d_mode = RSE::VIEWPORT_SCALING_3D_MODE_OFF;
 	fsr_sharpness = 0.0;
+	scaling_3d_fsr4_provider = 0;
 	msaa_3d = RSE::VIEWPORT_MSAA_DISABLED;
 	screen_space_aa = RSE::VIEWPORT_SCREEN_SPACE_AA_DISABLED;
 	use_taa = false;

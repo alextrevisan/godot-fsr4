@@ -30,6 +30,7 @@
 
 #include "rendering_server_default.h"
 
+#include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
@@ -286,6 +287,31 @@ void RenderingServerDefault::init() {
 		server_thread = Thread::MAIN_ID;
 		_init();
 	}
+
+#ifdef FSR4_ENABLED
+	// The available FSR 4 providers are only known once the device is up, so replace the static enum
+	// hint that "rendering/scaling_3d/fsr4_provider" was registered with at construction by the real
+	// versions the driver reports on this machine (per-machine and never stale). Labels are versions
+	// for display; the stored value stays the portable family (major version).
+	{
+		TypedArray<Dictionary> providers = get_fsr4_providers();
+		if (!providers.is_empty()) {
+			String hint = "Auto (best available):0";
+			Vector<int> seen_families;
+			for (int i = 0; i < providers.size(); i++) {
+				const Dictionary provider = providers[i];
+				const String name = provider.get("name", "");
+				const int family = name.get_slicec('.', 0).to_int();
+				if (family == 0 || seen_families.has(family)) {
+					continue;
+				}
+				seen_families.push_back(family);
+				hint += ",FSR " + name + ":" + itos(family);
+			}
+			ProjectSettings::get_singleton()->set_custom_property_info(PropertyInfo(Variant::INT, "rendering/scaling_3d/fsr4_provider", PROPERTY_HINT_ENUM, hint));
+		}
+	}
+#endif
 }
 
 void RenderingServerDefault::finish() {

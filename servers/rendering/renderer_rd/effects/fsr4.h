@@ -36,6 +36,7 @@
 #include "core/math/vector2i.h"
 #include "core/string/ustring.h"
 #include "core/templates/rid.h"
+#include "core/templates/vector.h"
 
 // AMD FSR 4 integration (Direct3D 12 only). FSR 4 is a machine-learning temporal upscaler from the
 // AMD FidelityFX SDK, shipped as signed DLLs and only reachable through the FidelityFX API on a
@@ -49,12 +50,19 @@ public:
 	void *ffx_context = nullptr; // ffxContext (opaque).
 	Size2i internal_size;
 	Size2i target_size;
+	uint64_t version_id = 0; // FfxApi provider version forced for this context (0 = loader default).
 
 	~FSR4Context();
 };
 
 class FSR4Effect {
 public:
+	// One FfxApi upscaler provider available on the current device (e.g. FSR 4.1.1 / 3.1.3 / 2.3.2).
+	struct Provider {
+		String name;
+		uint64_t version_id = 0; // Opaque id from ffxQueryDescGetVersions, passed to ffxOverrideVersion.
+	};
+
 	struct Parameters {
 		FSR4Context *context = nullptr;
 		Size2i internal_size;
@@ -82,12 +90,23 @@ public:
 	// Version string reported by the selected FSR upscaler provider (empty until a successful probe).
 	static String get_provider_version();
 
+	// Enumerates the FfxApi upscaler providers available on the current device (device-filtered by
+	// the loader). Returns an empty list when the backend is not Direct3D 12 or no runtime is present.
+	// Cached after the first successful query.
+	static Vector<Provider> get_providers();
+
+	// Resolves a provider family (major version: 4 = FSR 4.x, 3 = FSR 3.x, 2 = FSR 2.x; 0 = auto) to
+	// the version id of the newest available provider in that family, or 0 when it is auto or the
+	// family is unavailable on this device (so the loader falls back to its default).
+	static uint64_t resolve_provider_for_family(int p_family);
+
 	FSR4Effect();
 	~FSR4Effect();
 
-	// Creates a per-viewport upscale context sized for the given render/output resolutions.
-	// Returns nullptr on failure.
-	FSR4Context *create_context(Size2i p_internal_size, Size2i p_target_size);
+	// Creates a per-viewport upscale context sized for the given render/output resolutions. When
+	// p_version_id is non-zero, that specific provider version is forced (ffxOverrideVersion);
+	// otherwise the loader picks its default. Returns nullptr on failure.
+	FSR4Context *create_context(Size2i p_internal_size, Size2i p_target_size, uint64_t p_version_id = 0);
 
 	// Records an FSR 4 upscale for one view into the current frame via the render graph.
 	void upscale(const Parameters &p_params);

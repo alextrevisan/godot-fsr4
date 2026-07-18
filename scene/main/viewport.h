@@ -324,6 +324,7 @@ private:
 	Scaling3DMode scaling_3d_mode = SCALING_3D_MODE_BILINEAR;
 	float scaling_3d_scale = 1.0;
 	float fsr_sharpness = 0.2f;
+	int64_t scaling_3d_fsr4_provider = 0; // FfxApi upscaler version id (0 = loader default). See RenderingServer::get_fsr4_providers().
 	float texture_mipmap_bias = 0.0f;
 	AnisotropicFiltering anisotropic_filtering_level = ANISOTROPY_4X;
 	bool use_debanding = false;
@@ -610,6 +611,9 @@ public:
 
 	void set_fsr_sharpness(float p_fsr_sharpness);
 	float get_fsr_sharpness() const;
+
+	void set_scaling_3d_fsr4_provider(int64_t p_version_id);
+	int64_t get_scaling_3d_fsr4_provider() const;
 
 	void set_texture_mipmap_bias(float p_texture_mipmap_bias);
 	float get_texture_mipmap_bias() const;

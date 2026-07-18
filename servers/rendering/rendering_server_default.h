@@ -754,6 +754,7 @@ public:
 	FUNC2(viewport_set_scaling_3d_mode, RID, RSE::ViewportScaling3DMode)
 	FUNC2(viewport_set_scaling_3d_scale, RID, float)
 	FUNC2(viewport_set_fsr_sharpness, RID, float)
+	FUNC2(viewport_set_scaling_3d_fsr4_provider, RID, int64_t)
 	FUNC2(viewport_set_texture_mipmap_bias, RID, float)
 	FUNC2(viewport_set_anisotropic_filtering_level, RID, RSE::ViewportAnisotropicFiltering)
 
@@ -1170,6 +1171,7 @@ public:
 	FUNC0RC(String, get_video_adapter_name)
 	FUNC0RC(String, get_video_adapter_vendor)
 	FUNC0RC(String, get_video_adapter_api_version)
+	FUNC0RC(TypedArray<Dictionary>, get_fsr4_providers)
 #undef server_name
 #undef ServerName
 #undef WRITE_ACTION

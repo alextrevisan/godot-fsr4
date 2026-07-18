@@ -2869,6 +2869,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("viewport_set_scaling_3d_mode", "viewport", "scaling_3d_mode"), &RenderingServer::viewport_set_scaling_3d_mode);
 	ClassDB::bind_method(D_METHOD("viewport_set_scaling_3d_scale", "viewport", "scale"), &RenderingServer::viewport_set_scaling_3d_scale);
 	ClassDB::bind_method(D_METHOD("viewport_set_fsr_sharpness", "viewport", "sharpness"), &RenderingServer::viewport_set_fsr_sharpness);
+	ClassDB::bind_method(D_METHOD("viewport_set_scaling_3d_fsr4_provider", "viewport", "version_id"), &RenderingServer::viewport_set_scaling_3d_fsr4_provider);
 	ClassDB::bind_method(D_METHOD("viewport_set_texture_mipmap_bias", "viewport", "mipmap_bias"), &RenderingServer::viewport_set_texture_mipmap_bias);
 	ClassDB::bind_method(D_METHOD("viewport_set_anisotropic_filtering_level", "viewport", "anisotropic_filtering_level"), &RenderingServer::viewport_set_anisotropic_filtering_level);
 	ClassDB::bind_method(D_METHOD("viewport_set_update_mode", "viewport", "update_mode"), &RenderingServer::viewport_set_update_mode);
@@ -3521,6 +3522,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_video_adapter_vendor"), &RenderingServer::get_video_adapter_vendor);
 	ClassDB::bind_method(D_METHOD("get_video_adapter_type"), &RenderingServer::get_video_adapter_type);
 	ClassDB::bind_method(D_METHOD("get_video_adapter_api_version"), &RenderingServer::get_video_adapter_api_version);
+	ClassDB::bind_method(D_METHOD("get_fsr4_providers"), &RenderingServer::get_fsr4_providers);
 
 	ClassDB::bind_method(D_METHOD("get_current_rendering_driver_name"), &RenderingServer::get_current_rendering_driver_name);
 	ClassDB::bind_method(D_METHOD("get_current_rendering_method"), &RenderingServer::get_current_rendering_method);
@@ -3774,6 +3776,13 @@ void RenderingServer::init() {
 		GLOBAL_DEF_NOVAL(PropertyInfo(Variant::INT, "rendering/scaling_3d/mode.ios", PROPERTY_HINT_ENUM, mode_hints_metal), 0);
 		GLOBAL_DEF_NOVAL(PropertyInfo(Variant::INT, "rendering/scaling_3d/mode.macos", PROPERTY_HINT_ENUM, mode_hints_metal), 0);
 	}
+	// FSR 4 provider preference by family (D3D12/AMD), placed right after the mode it refines. "Auto"
+	// lets the FfxApi loader pick its default; the others force the newest available FSR 4.x / 3.x / 2.x
+	// provider on the device. Portable across GPUs (a family, not a device-specific version id).
+	// Overridden by Viewport.scaling_3d_fsr4_provider.
+	// Fallback hint (used when FSR 4 is unavailable); RenderingServerDefault::init() replaces it with
+	// the driver's real provider versions on machines where FSR 4 is present.
+	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/scaling_3d/fsr4_provider", PROPERTY_HINT_ENUM, "Auto (best available):0,FSR 4:4,FSR 3.1:3,FSR 2:2"), 0);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/scaling_3d/scale", PROPERTY_HINT_RANGE, "0.1,2.0,0.0001"), 1.0);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/scaling_3d/fsr_sharpness", PROPERTY_HINT_RANGE, "0,2,0.01"), 0.2f);
 
