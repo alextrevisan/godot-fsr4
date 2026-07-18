@@ -58,6 +58,7 @@ public:
 		RSE::ViewportScaling3DMode scaling_3d_mode = RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
 		float scaling_3d_scale = 1.0;
 		float fsr_sharpness = 0.2f;
+		int64_t scaling_3d_fsr4_provider = 0;
 		float texture_mipmap_bias = 0.0f;
 		RSE::ViewportAnisotropicFiltering anisotropic_filtering_level = RSE::VIEWPORT_ANISOTROPY_4X;
 		bool fsr_enabled = false;
@@ -235,6 +236,7 @@ public:
 	void viewport_set_scaling_3d_mode(RID p_viewport, RSE::ViewportScaling3DMode p_mode);
 	void viewport_set_scaling_3d_scale(RID p_viewport, float p_scaling_3d_scale);
 	void viewport_set_fsr_sharpness(RID p_viewport, float p_sharpness);
+	void viewport_set_scaling_3d_fsr4_provider(RID p_viewport, int64_t p_version_id);
 	void viewport_set_texture_mipmap_bias(RID p_viewport, float p_mipmap_bias);
 	void viewport_set_anisotropic_filtering_level(RID p_viewport, RSE::ViewportAnisotropicFiltering p_anisotropic_filtering_level);
 

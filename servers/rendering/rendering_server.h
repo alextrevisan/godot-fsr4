@@ -550,6 +550,7 @@ public:
 	virtual void viewport_set_scaling_3d_mode(RID p_viewport, RSE::ViewportScaling3DMode p_scaling_3d_mode) = 0;
 	virtual void viewport_set_scaling_3d_scale(RID p_viewport, float p_scaling_3d_scale) = 0;
 	virtual void viewport_set_fsr_sharpness(RID p_viewport, float p_fsr_sharpness) = 0;
+	virtual void viewport_set_scaling_3d_fsr4_provider(RID p_viewport, int64_t p_version_id) = 0;
 	virtual void viewport_set_texture_mipmap_bias(RID p_viewport, float p_texture_mipmap_bias) = 0;
 	virtual void viewport_set_anisotropic_filtering_level(RID p_viewport, RSE::ViewportAnisotropicFiltering p_anisotropic_filtering_level) = 0;
 
@@ -978,6 +979,11 @@ public:
 	virtual String get_video_adapter_vendor() const = 0;
 	virtual RenderingDeviceEnums::DeviceType get_video_adapter_type() const = 0;
 	virtual String get_video_adapter_api_version() const = 0;
+
+	// Lists the FfxApi upscaler providers (FSR 4.x/3.x/2.x) available on the current device, each as a
+	// { "name": String, "id": int } dictionary. Empty unless the backend is Direct3D 12 with FSR 4
+	// support compiled in. The "id" is passed to Viewport.set_scaling_3d_fsr4_provider().
+	virtual TypedArray<Dictionary> get_fsr4_providers() const = 0;
 
 	virtual void set_frame_profiling_enabled(bool p_enable) = 0;
 	virtual Vector<RenderingServerTypes::FrameProfileArea> get_frame_profile() = 0;

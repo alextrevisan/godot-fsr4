@@ -39,6 +39,7 @@
 #include "core/templates/pair.h"
 #include "core/templates/rid.h"
 #include "core/variant/callable.h"
+#include "core/variant/typed_array.h"
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_server_enums.h"
 
@@ -192,6 +193,7 @@ public:
 	virtual String get_video_adapter_vendor() const = 0;
 	virtual RenderingDeviceEnums::DeviceType get_video_adapter_type() const = 0;
 	virtual String get_video_adapter_api_version() const = 0;
+	virtual TypedArray<Dictionary> get_fsr4_providers() const { return TypedArray<Dictionary>(); }
 
 	virtual Size2i get_maximum_viewport_size() const = 0;
 	virtual uint32_t get_maximum_shader_varyings() const = 0;

@@ -5096,6 +5096,21 @@ float Viewport::get_fsr_sharpness() const {
 	return fsr_sharpness;
 }
 
+void Viewport::set_scaling_3d_fsr4_provider(int64_t p_version_id) {
+	ERR_MAIN_THREAD_GUARD;
+	if (scaling_3d_fsr4_provider == p_version_id) {
+		return;
+	}
+
+	scaling_3d_fsr4_provider = p_version_id;
+	RS::get_singleton()->viewport_set_scaling_3d_fsr4_provider(viewport, p_version_id);
+}
+
+int64_t Viewport::get_scaling_3d_fsr4_provider() const {
+	ERR_READ_THREAD_GUARD_V(0);
+	return scaling_3d_fsr4_provider;
+}
+
 void Viewport::set_texture_mipmap_bias(float p_texture_mipmap_bias) {
 	ERR_MAIN_THREAD_GUARD;
 	if (texture_mipmap_bias == p_texture_mipmap_bias) {
@@ -5328,6 +5343,9 @@ void Viewport::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_fsr_sharpness", "fsr_sharpness"), &Viewport::set_fsr_sharpness);
 	ClassDB::bind_method(D_METHOD("get_fsr_sharpness"), &Viewport::get_fsr_sharpness);
+
+	ClassDB::bind_method(D_METHOD("set_scaling_3d_fsr4_provider", "version_id"), &Viewport::set_scaling_3d_fsr4_provider);
+	ClassDB::bind_method(D_METHOD("get_scaling_3d_fsr4_provider"), &Viewport::get_scaling_3d_fsr4_provider);
 
 	ClassDB::bind_method(D_METHOD("set_texture_mipmap_bias", "texture_mipmap_bias"), &Viewport::set_texture_mipmap_bias);
 	ClassDB::bind_method(D_METHOD("get_texture_mipmap_bias"), &Viewport::get_texture_mipmap_bias);

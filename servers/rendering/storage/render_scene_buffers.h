@@ -49,6 +49,7 @@ private:
 	RSE::ViewportAnisotropicFiltering anisotropic_filtering_level = RSE::VIEWPORT_ANISOTROPY_4X;
 
 	float fsr_sharpness = 0.0;
+	int64_t scaling_3d_fsr4_provider = 0;
 	float texture_mipmap_bias = 0.0;
 	bool use_taa = false;
 	bool use_debanding = false;
@@ -80,6 +81,9 @@ public:
 
 	float get_fsr_sharpness() const { return fsr_sharpness; }
 	void set_fsr_sharpness(float p_fsr_sharpness) { fsr_sharpness = p_fsr_sharpness; }
+
+	int64_t get_scaling_3d_fsr4_provider() const { return scaling_3d_fsr4_provider; }
+	void set_scaling_3d_fsr4_provider(int64_t p_version_id) { scaling_3d_fsr4_provider = p_version_id; }
 
 	float get_texture_mipmap_bias() const { return texture_mipmap_bias; }
 	void set_texture_mipmap_bias(float p_texture_mipmap_bias) { texture_mipmap_bias = p_texture_mipmap_bias; }

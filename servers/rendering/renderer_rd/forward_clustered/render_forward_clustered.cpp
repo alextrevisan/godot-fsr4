@@ -93,8 +93,15 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(Rende
 
 #ifdef FSR4_ENABLED
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr4(RendererRD::FSR4Effect *p_effect) {
+	const uint64_t version_id = (uint64_t)render_buffers->get_scaling_3d_fsr4_provider();
+	// Rebuild the context if the requested provider version changed (e.g. the game switched the
+	// upscaler in its settings). Size changes already recreate the buffer data, and with it the context.
+	if (fsr4_context != nullptr && fsr4_context->version_id != version_id) {
+		memdelete(fsr4_context);
+		fsr4_context = nullptr;
+	}
 	if (fsr4_context == nullptr) {
-		fsr4_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
+		fsr4_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size(), version_id);
 	}
 }
 #endif
