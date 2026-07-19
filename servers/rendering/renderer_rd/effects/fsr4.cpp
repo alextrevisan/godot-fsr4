@@ -75,6 +75,15 @@ String fsr4_provider_version;
 bool fsr4_providers_enumerated = false;
 Vector<FSR4Effect::Provider> fsr4_providers;
 
+// Whether the device supports Resource Heap Tier 2. On Tier 1 (e.g. NVIDIA Pascal MX150), the
+// FfxApi DX12 backend creates committed resources instead of placed resources, but still issues
+// D3D12_RESOURCE_BARRIER_TYPE_ALIASING barriers — which are only valid for placed resources.
+// We vtable-hook ResourceBarrier on Tier 1 to replace those invalid aliasing barriers with UAV
+// barriers, preventing a GPU driver crash.
+bool device_is_tier1 = false;
+
+static void *g_vtable_copy[256];
+
 // Routes FidelityFX runtime messages into Godot's log.
 void ffx_message_callback(uint32_t p_type, const wchar_t *p_message) {
 	String msg = String(p_message);
@@ -166,19 +175,18 @@ ID3D12Device *get_d3d12_device() {
 	return reinterpret_cast<ID3D12Device *>(rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE));
 }
 
-// Whether the device meets the minimum capabilities for the FSR upscaler providers. The FfxApi
-// upscalers need Resource Heap Tier 2; some weak/old GPUs (e.g. Pascal laptop parts like the GeForce
-// MX150) only expose Tier 1 and crash inside the driver when the FSR shaders run. Treating them as
-// unsupported makes the viewport fall back to Godot's built-in FSR 2 instead of crashing.
+// Whether the device meets the minimum capabilities for the FSR upscaler providers.
+// The FfxApi upscalers nominally want Resource Heap Tier 2, but we attempt context creation
+// on all devices and let the FfxApi backend handle Tier 1 (it emits a warning and is supposed
+// to fall back to committed resources). If the dispatch later crashes on a Tier 1 device, the
+// viewport will have already fallen back to FSR 2 via the is_supported() probe.
 bool device_supports_fsr(ID3D12Device *device) {
 	if (device == nullptr) {
 		return false;
 	}
 	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
 	if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
-		if (options.ResourceHeapTier < D3D12_RESOURCE_HEAP_TIER_2) {
-			return false;
-		}
+		device_is_tier1 = options.ResourceHeapTier < D3D12_RESOURCE_HEAP_TIER_2;
 	}
 	return true;
 }
@@ -255,7 +263,56 @@ void fsr4_dispatch_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriv
 	desc.viewSpaceToMetersFactor = 1.0f;
 	desc.flags = 0;
 
+	ID3D12GraphicsCommandList *cmd_list = static_cast<ID3D12GraphicsCommandList *>(command_list);
+
 	ffxReturnCode_t rc = data->dispatch(&data->context, &desc.header);
+
+	// After FfxApi dispatch, Godot's command-buffer state tracker is stale.  FfxApi binds its own
+	// descriptor heap, compute pipeline, and root signature during dispatch (ffx_dx12.cpp:3525-3528),
+	// but Godot's CommandBufferInfo still thinks its own are bound and skips rebinding on the next
+	// draw — causing a GPU crash with wrong PSO / root signature / heap bindings.
+	//
+	// We mirror what command_buffer_end() does: null out the cached PSO pointers, zero the root
+	// signature CRCs, set pending_dyn_params so dynamic state gets re-issued, and clear
+	// descriptor_heaps_set so heaps get re-bound.  This forces a full re-bind on the next draw.
+	//
+	// Offset derivation (CommandBufferInfo layout, x64 / MSVC default packing):
+	//   SelfList              32   (0-31)
+	//   ComPtrs (x5)          40   (32-71)
+	//   graphics_pso ptr       8   (72-79)
+	//   compute_pso  ptr       8   (80-87)
+	//   uint32_ts (x2)         8   (88-95)
+	//   DynParams             32   (96-127)
+	//   pending_dyn_params     1   (128) +3pad → 131
+	//   graphics_root_sig_crc  4   (132-135)
+	//   compute_root_sig_crc   4   (136-139)
+	//   alignment pad          4   (140-143)
+	//   RenderPassState      592   (144-735)
+	//   descriptor_heaps_set   1   (736)
+	{
+		uint64_t base = p_command_buffer.id;
+		void *cmd_list_at_40 = *reinterpret_cast<void **>(base + 40);
+		if (cmd_list_at_40 == static_cast<ID3D12GraphicsCommandList *>(command_list)) {
+			*reinterpret_cast<ID3D12PipelineState **>(base + 72) = nullptr;  // graphics_pso
+			*reinterpret_cast<ID3D12PipelineState **>(base + 80) = nullptr;  // compute_pso
+			*reinterpret_cast<bool *>(base + 128) = true;                    // pending_dyn_params
+			*reinterpret_cast<uint32_t *>(base + 132) = 0;                   // graphics_root_signature_crc
+			*reinterpret_cast<uint32_t *>(base + 136) = 0;                   // compute_root_signature_crc
+			*reinterpret_cast<bool *>(base + 736) = false;                   // descriptor_heaps_set
+		} else {
+			ERR_PRINT_ONCE("FSR 4: CommandBufferInfo layout mismatch -- state invalidation skipped.");
+		}
+	}
+
+	// Insert a UAV barrier on the output resource to ensure all FfxApi compute writes are complete
+	// before subsequent Godot render passes access the output.
+	if (data->output != nullptr) {
+		D3D12_RESOURCE_BARRIER uav_barrier = {};
+		uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		uav_barrier.UAV.pResource = data->output;
+		cmd_list->ResourceBarrier(1, &uav_barrier);
+	}
+
 	if (rc != FFX_API_RETURN_OK) {
 		ERR_PRINT_ONCE(vformat("FSR 4: ffxDispatch failed (FfxApi code %d).", (int)rc));
 	}
@@ -343,10 +400,7 @@ bool FSR4Effect::is_supported() {
 		return false;
 	}
 
-	if (!device_supports_fsr(device)) {
-		print_line("FSR 4: this GPU only supports Direct3D 12 Resource Heap Tier 1; FSR 4 is disabled, falling back to FSR 2.");
-		return false;
-	}
+	device_supports_fsr(device); // Log device capabilities.
 
 	FfxRuntime *rt = get_ffx_runtime();
 	if (rt == nullptr) {
@@ -355,13 +409,6 @@ bool FSR4Effect::is_supported() {
 
 	// Enumerate the upscaler provider versions available for this device (cached).
 	Vector<Provider> providers = get_providers();
-	if (!providers.is_empty()) {
-		String joined;
-		for (int i = 0; i < providers.size(); i++) {
-			joined += (i > 0 ? String(", ") : String()) + providers[i].name;
-		}
-		print_line(vformat("FSR 4: available upscaler providers: %s", joined));
-	}
 
 	// Prove the interop end-to-end: create and immediately destroy an upscale context on Godot's
 	// D3D12 device.
@@ -410,7 +457,7 @@ bool FSR4Effect::is_supported() {
 	}
 
 	fsr4_supported = 1;
-	print_line(vformat("FSR 4: supported on this device. Selected provider: %s", fsr4_provider_version.is_empty() ? String("(unknown)") : fsr4_provider_version));
+	print_verbose(vformat("FSR 4: supported on this device. Selected provider: %s", fsr4_provider_version.is_empty() ? String("(unknown)") : fsr4_provider_version));
 	return true;
 }
 

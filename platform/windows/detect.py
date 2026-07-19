@@ -516,9 +516,12 @@ def configure_msvc(env: "SConsEnvironment"):
         LIBS += ["version"]  # Mesa dependency.
 
     if env["fsr4"]:
-        # FSR 4 (AMD FidelityFX) is Direct3D 12 only, and its runtime is provided by the AMD driver
-        # (amd_fidelityfx_dx12.dll) — no binary is redistributed. Only the FfxApi headers are needed
-        # at build time; they are vendored in thirdparty/amd-fsr4.
+        # FSR 4 (AMD FidelityFX) is Direct3D 12 only. Only the FfxApi headers are vendored in
+        # thirdparty/amd-fsr4 for building — the runtime DLLs are NOT redistributed (AMD's license
+        # does not allow it). End users must download them manually from AMD and place them next
+        # to the Godot executable; see README.md for instructions. On AMD RDNA 3/4 with a recent
+        # driver, the driver's own amd_fidelityfx_dx12.dll (in System32) is used automatically and
+        # no manual download is needed.
         if not env["d3d12"]:
             print_error("The `fsr4` option requires `d3d12=yes` (AMD FSR 4 is Direct3D 12 only).")
             sys.exit(255)
