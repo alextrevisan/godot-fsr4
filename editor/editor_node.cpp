@@ -145,7 +145,7 @@
 #include "editor/settings/editor_settings_dialog.h"
 #include "editor/settings/project_settings_editor.h"
 #include "editor/shader/editor_native_shader_source_visualizer.h"
-#include "editor/shader/text_shader_editor.h"
+#include "editor/shader/shader_text_editor.h"
 #include "editor/themes/editor_color_map.h"
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
@@ -177,7 +177,9 @@
 #include "scene/resources/portable_compressed_texture.h"
 #include "scene/theme/theme_db.h"
 #include "servers/audio/audio_server.h"
+#include "servers/audio/audio_server_enums.h"
 #include "servers/display/display_server.h"
+#include "servers/display/display_server_enums.h"
 #include "servers/navigation_2d/navigation_server_2d.h"
 #include "servers/navigation_3d/navigation_server_3d.h"
 #include "servers/rendering/rendering_device.h"
@@ -487,9 +489,8 @@ void EditorNode::_update_from_settings() {
 		Viewport::DefaultCanvasItemTextureRepeat tr = (Viewport::DefaultCanvasItemTextureRepeat)current_repeat;
 		scene_root->set_default_canvas_item_texture_repeat(tr);
 	}
-	bool allow_fallback = GLOBAL_GET("internationalization/locale/allow_fallback");
 	String current_fallback_locale = GLOBAL_GET("internationalization/locale/fallback");
-	if (allow_fallback && current_fallback_locale != TranslationServer::get_singleton()->get_fallback_locale()) {
+	if (current_fallback_locale != TranslationServer::get_singleton()->get_fallback_locale()) {
 		TranslationServer::get_singleton()->set_fallback_locale(current_fallback_locale);
 		Ref<TranslationDomain> domain = TranslationServer::get_singleton()->get_main_domain();
 		if (!domain->is_enabled()) {
@@ -741,8 +742,7 @@ void EditorNode::_update_theme(bool p_skip_creation) {
 #if defined(MODULE_GDSCRIPT_ENABLED) || defined(MODULE_MONO_ENABLED)
 		if (EditorHelpHighlighter::get_singleton()) {
 			// Update syntax colors.
-			EditorHelpHighlighter::free_singleton();
-			EditorHelpHighlighter::create_singleton();
+			EditorHelpHighlighter::get_singleton()->clear_cache();
 		}
 #endif
 	}
@@ -801,6 +801,7 @@ void EditorNode::_update_theme(bool p_skip_creation) {
 	editor_dock_manager->update_tab_styles();
 	editor_dock_manager->update_docks_menu();
 	editor_dock_manager->set_tab_icon_max_width(theme->get_constant(SNAME("class_icon_size"), EditorStringName(Editor)));
+
 #ifdef ANDROID_ENABLED
 	DisplayServer::get_singleton()->window_set_color(theme->get_color(SNAME("background"), EditorStringName(Editor)));
 #endif
@@ -913,6 +914,8 @@ void EditorNode::_notification(int p_what) {
 				// TRANSLATORS: The placeholder is the rendering method that has overridden the default one.
 				renderer->set_item_text(0, vformat(TTR("%s (Overridden)"), _to_rendering_method_display_name(current_renderer_os)));
 			}
+
+			EditorHelpBit::clear_cache();
 		} break;
 
 		case NOTIFICATION_POSTINITIALIZE: {
@@ -1203,11 +1206,6 @@ void EditorNode::_notification(int p_what) {
 				DisplayServer::get_singleton()->screen_set_keep_on(EDITOR_GET("interface/editor/display/keep_screen_on"));
 			}
 
-#if defined(MODULE_GDSCRIPT_ENABLED) || defined(MODULE_MONO_ENABLED)
-			if (EditorSettings::get_singleton()->check_changed_settings_in_group("text_editor/theme/highlighting")) {
-				EditorHelpHighlighter::get_singleton()->reset_cache();
-			}
-#endif
 #ifdef ANDROID_ENABLED
 			if (EditorSettings::get_singleton()->check_changed_settings_in_group("interface/touchscreen/touch_actions_panel")) {
 				_touch_actions_panel_mode_changed();
@@ -6100,19 +6098,19 @@ String EditorNode::_get_system_info() const {
 	const String audio_driver_name = AudioServer::get_singleton()->get_driver_name();
 	const float mix_rate = AudioServer::get_singleton()->get_mix_rate();
 
-	AudioServer::SpeakerMode speaker_mode = AudioServer::get_singleton()->get_speaker_mode();
+	AuSE::SpeakerMode speaker_mode = AudioServer::get_singleton()->get_speaker_mode();
 	String speaker_mode_string;
 	switch (speaker_mode) {
-		case AudioServer::SpeakerMode::SPEAKER_MODE_STEREO:
+		case AuSE::SpeakerMode::SPEAKER_MODE_STEREO:
 			speaker_mode_string = "Stereo/mono";
 			break;
-		case AudioServer::SpeakerMode::SPEAKER_SURROUND_31:
+		case AuSE::SpeakerMode::SPEAKER_SURROUND_31:
 			speaker_mode_string = "Surround 3.1";
 			break;
-		case AudioServer::SpeakerMode::SPEAKER_SURROUND_51:
+		case AuSE::SpeakerMode::SPEAKER_SURROUND_51:
 			speaker_mode_string = "Surround 5.1";
 			break;
-		case AudioServer::SpeakerMode::SPEAKER_SURROUND_71:
+		case AuSE::SpeakerMode::SPEAKER_SURROUND_71:
 			speaker_mode_string = "Surround 7.1";
 			break;
 	}
@@ -8518,9 +8516,13 @@ EditorNode::EditorNode() {
 	// Define a minimum window size to prevent UI elements from overlapping or being cut off.
 	Window *w = Object::cast_to<Window>(SceneTree::get_singleton()->get_root());
 	if (w) {
-		const Size2 minimum_size = Size2(1024, 600) * EDSCALE;
-		w->set_min_size(minimum_size); // Calling it this early doesn't sync the property with DS.
-		DisplayServer::get_singleton()->window_set_min_size(minimum_size);
+		const Size2 display_size = DisplayServer::get_singleton()->screen_get_usable_rect(DisplayServerEnums::SCREEN_OF_MAIN_WINDOW).size;
+		const real_t smallest_display_dimension = display_size.width < display_size.height ? display_size.width : display_size.height;
+		const Size2 editor_minimum_size = Size2(1024, 600) * EDSCALE;
+		// Ensure the minimum size is not larger than the display size to avoid issues on smaller screens.
+		const Size2 computed_minimum_size = editor_minimum_size.minf(smallest_display_dimension);
+		w->set_min_size(computed_minimum_size); // Calling it this early doesn't sync the property with DS.
+		DisplayServer::get_singleton()->window_set_min_size(computed_minimum_size);
 	}
 
 	FileDialog::set_default_show_hidden_files(EDITOR_GET("filesystem/file_dialog/show_hidden_files"));
@@ -9463,7 +9465,7 @@ EditorNode::EditorNode() {
 
 	ScriptTextEditor::register_editor(); // Register one for text scripts.
 	TextEditor::register_editor();
-	TextShaderEditor::register_editor();
+	ShaderTextEditor::register_editor();
 
 	if (AssetLibraryEditorPlugin::is_available()) {
 		add_editor_plugin(memnew(AssetLibraryEditorPlugin));
