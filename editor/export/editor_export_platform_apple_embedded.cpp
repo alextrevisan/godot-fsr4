@@ -990,10 +990,7 @@ Error EditorExportPlatformAppleEmbedded::_convert_to_framework(const String &p_s
 	}
 
 	if (!filesystem_da->dir_exists(p_destination)) {
-		Error make_dir_err = filesystem_da->make_dir_recursive(p_destination);
-		if (make_dir_err) {
-			return make_dir_err;
-		}
+		RETURN_IF_ERROR(filesystem_da->make_dir_recursive(p_destination));
 	}
 
 	String asset = p_source.ends_with("/") ? p_source.left(-1) : p_source;
@@ -1256,10 +1253,7 @@ Error EditorExportPlatformAppleEmbedded::_copy_asset(const Ref<EditorExportPrese
 		destination = destination_dir;
 
 		// Convert to framework and copy.
-		Error err = _convert_to_framework(p_asset, destination, p_preset->get("application/bundle_identifier"));
-		if (err) {
-			return err;
-		}
+		RETURN_IF_ERROR(_convert_to_framework(p_asset, destination, p_preset->get("application/bundle_identifier")));
 	} else if (p_is_framework && asset.ends_with(".xcframework")) {
 		// For Apple Embedded platforms we need to turn .dylib inside .xcframework
 		// into .framework to be able to send application to AppStore
@@ -1285,22 +1279,13 @@ Error EditorExportPlatformAppleEmbedded::_copy_asset(const Ref<EditorExportPrese
 
 		if (dylibs > 0) {
 			// Convert to framework and copy.
-			Error err = _convert_to_framework(p_asset, destination, p_preset->get("application/bundle_identifier"));
-			if (err) {
-				return err;
-			}
+			RETURN_IF_ERROR(_convert_to_framework(p_asset, destination, p_preset->get("application/bundle_identifier")));
 		} else {
 			// Copy as is.
 			if (!filesystem_da->dir_exists(destination_dir)) {
-				Error make_dir_err = filesystem_da->make_dir_recursive(destination_dir);
-				if (make_dir_err) {
-					return make_dir_err;
-				}
+				RETURN_IF_ERROR(filesystem_da->make_dir_recursive(destination_dir));
 			}
-			Error err = dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination);
-			if (err) {
-				return err;
-			}
+			RETURN_IF_ERROR(dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination));
 		}
 	} else if (p_is_framework && asset.ends_with(".framework")) {
 		// Framework.
@@ -1320,15 +1305,9 @@ Error EditorExportPlatformAppleEmbedded::_copy_asset(const Ref<EditorExportPrese
 
 		// Copy as is.
 		if (!filesystem_da->dir_exists(destination_dir)) {
-			Error make_dir_err = filesystem_da->make_dir_recursive(destination_dir);
-			if (make_dir_err) {
-				return make_dir_err;
-			}
+			RETURN_IF_ERROR(filesystem_da->make_dir_recursive(destination_dir));
 		}
-		Error err = dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination);
-		if (err) {
-			return err;
-		}
+		RETURN_IF_ERROR(dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination));
 	} else {
 		// Unknown resource.
 		asset_path = base_dir;
@@ -1347,15 +1326,9 @@ Error EditorExportPlatformAppleEmbedded::_copy_asset(const Ref<EditorExportPrese
 
 		// Copy as is.
 		if (!filesystem_da->dir_exists(destination_dir)) {
-			Error make_dir_err = filesystem_da->make_dir_recursive(destination_dir);
-			if (make_dir_err) {
-				return make_dir_err;
-			}
+			RETURN_IF_ERROR(filesystem_da->make_dir_recursive(destination_dir));
 		}
-		Error err = dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination);
-		if (err) {
-			return err;
-		}
+		RETURN_IF_ERROR(dir_exists ? da->copy_dir(p_asset, destination) : da->copy(p_asset, destination));
 	}
 
 	if (asset_path.ends_with("/")) {
@@ -1659,14 +1632,36 @@ Error EditorExportPlatformAppleEmbedded::_export_apple_embedded_plugins(const Re
 		pbx_id.low_bits = 0;
 
 		HashMap<String, PluginConfigAppleEmbedded::SPMPackage> unique_packages;
+
+		// Collect from .gdip plugin configs
 		for (int i = 0; i < enabled_plugins.size(); i++) {
 			for (const PluginConfigAppleEmbedded::SPMPackage &package : enabled_plugins[i].spm_packages) {
 				if (!unique_packages.has(package.url)) {
 					unique_packages[package.url] = package;
 				} else {
 					for (const String &product : package.products) {
-						if (unique_packages[package.url].products.find(product) == -1) {
+						if (!unique_packages[package.url].products.has(product)) {
 							unique_packages[package.url].products.push_back(product);
+						}
+					}
+				}
+			}
+		}
+
+		// Also collect from EditorExportPlugins (added using add_apple_embedded_platform_spm_package() method)
+		Vector<Ref<EditorExportPlugin>> export_plugins = EditorExport::get_singleton()->get_export_plugins();
+		for (int i = 0; i < export_plugins.size(); i++) {
+			for (const EditorExportPlugin::AppleEmbeddedSPMPackage &ep_package : export_plugins[i]->get_apple_embedded_platform_spm_packages()) {
+				if (!unique_packages.has(ep_package.url)) {
+					PluginConfigAppleEmbedded::SPMPackage package;
+					package.url = ep_package.url;
+					package.version = ep_package.version;
+					package.products = ep_package.products;
+					unique_packages[ep_package.url] = package;
+				} else {
+					for (const String &product : ep_package.products) {
+						if (!unique_packages[ep_package.url].products.has(product)) {
+							unique_packages[ep_package.url].products.push_back(product);
 						}
 					}
 				}
@@ -1716,6 +1711,8 @@ Error EditorExportPlatformAppleEmbedded::_export_apple_embedded_plugins(const Re
 }
 
 Error EditorExportPlatformAppleEmbedded::export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, BitField<EditorExportPlatform::DebugFlags> p_flags, bool p_notify) {
+	Error result = customize_exported_project(p_preset, p_debug, p_path, p_flags);
+	ERR_FAIL_COND_V_MSG(result != OK, FAILED, "Error customizing export project");
 	return _export_project_helper(p_preset, p_debug, p_path, p_flags, p_notify, false);
 }
 

@@ -38,6 +38,7 @@
 #include "core/object/class_db.h"
 #include "core/os/keyboard.h"
 #include "core/os/os.h"
+#include "core/string/regex.h"
 #include "core/string/translation_server.h"
 #include "scene/gui/label.h"
 #include "scene/gui/popup_menu.h"
@@ -52,11 +53,6 @@
 #include "servers/display/accessibility_server.h"
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
-
-#include "modules/modules_enabled.gen.h" // For regex.
-#ifdef MODULE_REGEX_ENABLED
-#include "modules/regex/regex.h"
-#endif
 
 RichTextLabel::ItemDropcap::~ItemDropcap() {
 	if (font.is_valid()) {
@@ -3976,7 +3972,7 @@ Color RichTextLabel::_find_fgcolor(Item *p_item) {
 
 bool RichTextLabel::_find_layout_subitem(Item *from, Item *to) {
 	if (from && from != to) {
-		if (from->type != ITEM_FONT && from->type != ITEM_COLOR && from->type != ITEM_UNDERLINE && from->type != ITEM_STRIKETHROUGH && from->type != ITEM_INDENT) {
+		if (from->type != ITEM_FONT && from->type != ITEM_FONT_SIZE && from->type != ITEM_COLOR && from->type != ITEM_UNDERLINE && from->type != ITEM_STRIKETHROUGH && from->type != ITEM_INDENT) {
 			return true;
 		}
 
@@ -8127,9 +8123,7 @@ void RichTextLabel::_bind_methods() {
 	BIND_THEME_ITEM(Theme::DATA_TYPE_COLOR, RichTextLabel, table_border);
 
 	ADD_CLASS_DEPENDENCY("PopupMenu");
-#ifdef MODULE_REGEX_ENABLED
 	ADD_CLASS_DEPENDENCY("RegEx");
-#endif
 }
 
 TextServer::VisibleCharactersBehavior RichTextLabel::get_visible_characters_behavior() const {
@@ -8425,7 +8419,6 @@ Dictionary RichTextLabel::parse_expressions_for_values(Vector<String> p_expressi
 
 		Vector<String> values = parts[1].split(",", false);
 
-#ifdef MODULE_REGEX_ENABLED
 		RegEx color = RegEx();
 		color.compile("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$");
 		RegEx nodepath = RegEx();
@@ -8459,7 +8452,6 @@ Dictionary RichTextLabel::parse_expressions_for_values(Vector<String> p_expressi
 				a.append(values[j]);
 			}
 		}
-#endif
 
 		if (values.size() > 1) {
 			d[key] = a;

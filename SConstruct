@@ -721,25 +721,14 @@ if cc_version_major == -1:
         "Build may fail if the compiler doesn't support C++17 fully."
     )
 elif methods.using_gcc(env):
-    if env.get("winrt"):
-        if cc_version_major < 11:
-            print_error(
-                "Detected GCC version older than 11, which does not fully support "
-                "C++20, or has bugs when compiling Godot. Supported versions are 12 "
-                "and later. Use a newer GCC version, or Clang 14 or later by passing "
-                '"use_llvm=yes" to the SCons command line, or disable WinRT support by '
-                'passing "winrt=no" to the SCons command line.'
-            )
-            Exit(255)
-    else:
-        if cc_version_major < 9:
-            print_error(
-                "Detected GCC version older than 9, which does not fully support "
-                "C++17, or has bugs when compiling Godot. Supported versions are 9 "
-                "and later. Use a newer GCC version, or Clang 6 or later by passing "
-                '"use_llvm=yes" to the SCons command line.'
-            )
-            Exit(255)
+    if cc_version_major < 9:
+        print_error(
+            "Detected GCC version older than 9, which does not fully support "
+            "C++17, or has bugs when compiling Godot. Supported versions are 9 "
+            "and later. Use a newer GCC version, or Clang 6 or later by passing "
+            '"use_llvm=yes" to the SCons command line.'
+        )
+        Exit(255)
     if cc_version_metadata1 == "win32":
         print_error(
             "Detected mingw version is not using posix threads. Only posix "
@@ -758,24 +747,15 @@ elif methods.using_clang(env):
             )
             Exit(255)
     else:
-        if env.get("winrt"):
-            if cc_version_major < 13:
-                print_error(
-                    "Detected Clang version older than 13, which does not fully support "
-                    "C++20. Supported versions are Clang 14 and later, or disable WinRT "
-                    'support by passing "winrt=no" to the SCons command line.'
-                )
-                Exit(255)
-        else:
-            if cc_version_major < 6:
-                print_error(
-                    "Detected Clang version older than 6, which does not fully support "
-                    "C++17. Supported versions are Clang 6 and later."
-                )
-                Exit(255)
-            elif env["debug_paths_relative"] and cc_version_major < 10:
-                print_warning("Clang < 10 doesn't support -ffile-prefix-map, disabling `debug_paths_relative` option.")
-                env["debug_paths_relative"] = False
+        if cc_version_major < 6:
+            print_error(
+                "Detected Clang version older than 6, which does not fully support "
+                "C++17. Supported versions are Clang 6 and later."
+            )
+            Exit(255)
+        elif env["debug_paths_relative"] and cc_version_major < 10:
+            print_warning("Clang < 10 doesn't support -ffile-prefix-map, disabling `debug_paths_relative` option.")
+            env["debug_paths_relative"] = False
 
 elif env.msvc:
     if cc_version_major == 16 and cc_version_minor < 11:
@@ -1149,7 +1129,7 @@ methods.sort_module_list(env)
 
 if env.editor_build:
     # Add editor-specific dependencies to the dependency graph.
-    env.module_add_dependencies("editor", ["freetype", "regex", "svg"])
+    env.module_add_dependencies("editor", ["freetype", "svg"])
 
     # And check if they are met.
     if not env.module_check_dependencies("editor"):

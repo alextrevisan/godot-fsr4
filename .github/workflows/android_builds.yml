@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -67,10 +67,21 @@ jobs:
       - name: Download Swappy
         run: python ./misc/scripts/install_swappy_android.py
 
+      - name: Download Perfetto
+        shell: sh
+        id: perfetto_sdk
+        run: |
+          if python ./misc/scripts/install_perfetto.py; then
+            echo "PROFILER_ENABLED=perfetto" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Perfetto installation failed, building without Perfetto support."
+            echo "PROFILER_ENABLED=none" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Compilation
         uses: ./.github/actions/godot-build
         with:
-          scons-flags: ${{ env.SCONS_FLAGS }} ${{ matrix.scons-flags }}
+          scons-flags: ${{ env.SCONS_FLAGS }} ${{ matrix.scons-flags }} profiler=${{ steps.perfetto_sdk.outputs.PROFILER_ENABLED }}
           platform: android
           target: ${{ matrix.target }}
 
