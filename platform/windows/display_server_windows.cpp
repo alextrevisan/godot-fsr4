@@ -1521,6 +1521,12 @@ int DisplayServerWindows::screen_get_dpi(int p_screen) const {
 	return data.dpi;
 }
 
+float DisplayServerWindows::screen_get_scale(int p_screen) const {
+	// Windows always reports the monitor DPI as 96 when the scale option in Windows' settings is set to 100%,
+	// regardless of the monitor's resolution and physical size. This value is then multiplied by the scale factor.
+	return screen_get_dpi(p_screen) / 96.0;
+}
+
 Color DisplayServerWindows::screen_get_pixel(const Point2i &p_position) const {
 	Point2i pos = p_position + _get_screens_origin();
 
@@ -7468,6 +7474,7 @@ void DisplayServerWindows::_destroy_window(DisplayServerEnums::WindowID p_window
 
 	if (has_winrt_queue) {
 		WinRTUtils::destroy_wd(wd.wrt_wd);
+		wd.wrt_wd = nullptr;
 	}
 	DestroyWindow(wd.hWnd);
 	windows.erase(p_window_id);
@@ -7799,14 +7806,16 @@ DisplayServerWindows::DisplayServerWindows(const String &p_rendering_driver, Dis
 
 	rendering_driver = p_rendering_driver;
 
-	// Init TTS
+	native_menu = memnew(NativeMenuWindows);
+
+	// Init WinRT API and create dispatch queue.
+	has_winrt_queue = WinRTUtils::create_queue();
+
+	// Init TTS (note: should be called after WinRT init).
 	bool tts_enabled = GLOBAL_GET("audio/general/text_to_speech");
 	if (tts_enabled) {
 		initialize_tts();
 	}
-	native_menu = memnew(NativeMenuWindows);
-
-	has_winrt_queue = WinRTUtils::create_queue();
 
 	// Enforce default keep screen on value.
 	screen_set_keep_on(GLOBAL_GET("display/window/energy_saving/keep_screen_on"));
