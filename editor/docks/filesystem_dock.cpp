@@ -1479,12 +1479,18 @@ void FileSystemDock::_update_history() {
 	current_path = history[history_pos];
 	_set_current_path_line_edit_text(current_path);
 
+	file_list_search_box->clear();
+	tree_search_box->clear();
+	searched_tokens.clear();
+
 	if (tree->is_visible()) {
+		tree->deselect_all();
 		_update_tree(get_uncollapsed_paths());
 		tree->grab_focus(true);
 	}
 
 	if (file_list_vb->is_visible()) {
+		files->deselect_all();
 		_update_file_list(false);
 	}
 
@@ -2186,6 +2192,19 @@ Vector<String> FileSystemDock::_file_list_get_selected() const {
 	return selected;
 }
 
+Dictionary FileSystemDock::_get_context_data(const PackedStringArray &p_selected_files) {
+	EditorContextMenuPlugin::OptionsData context_data;
+	context_data["selected_files"] = p_selected_files;
+	return context_data;
+}
+
+Dictionary FileSystemDock::_get_context_data_for_create(const String &p_base_dir, bool p_needs_prefix) {
+	EditorContextMenuPlugin::OptionsData context_data;
+	context_data["base_directory"] = p_base_dir;
+	context_data["needs_prefix"] = p_needs_prefix;
+	return context_data;
+}
+
 Vector<String> FileSystemDock::_remove_self_included_paths(Vector<String> selected_strings) {
 	// Remove paths or files that are included into another.
 	if (selected_strings.size() > 1) {
@@ -2284,7 +2303,7 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 					external_program = EDITOR_GET("text_editor/external/exec_path");
 				} else if (extension == "res" || extension == "scn") {
 					// Binary resources have no meaningful editor outside Godot, so just fallback to something default.
-				} else if (resource_type == "CompressedTexture2D" || resource_type == "Image") {
+				} else if (resource_type == "CompressedTexture2D" || resource_type == "StreamedTexture2D" || resource_type == "Image") {
 					if (extension == "svg" || extension == "svgz") {
 						external_program = EDITOR_GET("filesystem/external_programs/vector_image_editor");
 					} else {
@@ -2784,12 +2803,14 @@ int FileSystemDock::_get_menu_option_from_key(const Ref<InputEventKey> &p_key) {
 		return FILE_MENU_NEW_TEXTFILE;
 	} else if (ED_IS_SHORTCUT("filesystem_dock/rename", p_key)) {
 		return FILE_MENU_RENAME;
+#if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
 	} else if (ED_IS_SHORTCUT("filesystem_dock/show_in_explorer", p_key)) {
 		return FILE_MENU_SHOW_IN_EXPLORER;
 	} else if (ED_IS_SHORTCUT("filesystem_dock/open_in_external_program", p_key)) {
 		return FILE_MENU_OPEN_EXTERNAL;
 	} else if (ED_IS_SHORTCUT("filesystem_dock/open_in_terminal", p_key)) {
 		return FILE_MENU_OPEN_IN_TERMINAL;
+#endif
 	} else if (ED_IS_SHORTCUT("filesystem_dock/focus_path", p_key)) {
 		return EXTRA_FOCUS_PATH;
 	} else if (ED_IS_SHORTCUT("editor/open_search", p_key)) {
@@ -3549,7 +3570,7 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 			p_popup->add_icon_item(get_editor_theme_icon(SNAME("Favorites")), TTRC("Add to Favorites"), FILE_MENU_ADD_FAVORITE);
 		}
 		if (!all_not_favorites) {
-			p_popup->add_icon_item(get_editor_theme_icon(SNAME("NonFavorite")), TTRC("Remove from Favorites"), FILE_MENU_REMOVE_FAVORITE);
+			p_popup->add_icon_item(get_editor_theme_icon(SNAME("Unfavorite")), TTRC("Remove from Favorites"), FILE_MENU_REMOVE_FAVORITE);
 		}
 
 		if (root_path_not_selected) {
@@ -3666,9 +3687,9 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 		current_path = fpath;
 	} else if (no_paths) {
 #if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
-		tree_popup->add_separator();
-		tree_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Terminal")), ED_GET_SHORTCUT("filesystem_dock/open_in_terminal"), FILE_MENU_OPEN_IN_TERMINAL);
-		tree_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Filesystem")), ED_GET_SHORTCUT("filesystem_dock/show_in_explorer"), FILE_MENU_SHOW_IN_EXPLORER);
+		p_popup->add_separator();
+		p_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Terminal")), ED_GET_SHORTCUT("filesystem_dock/open_in_terminal"), FILE_MENU_OPEN_IN_TERMINAL);
+		p_popup->add_icon_shortcut(get_editor_theme_icon(SNAME("Filesystem")), ED_GET_SHORTCUT("filesystem_dock/show_in_explorer"), FILE_MENU_SHOW_IN_EXPLORER);
 #endif
 	}
 
@@ -3680,9 +3701,7 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 #endif
 
 	if (EditorContextMenuPluginManager::get_singleton()->has_plugins_for_slot(EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM)) {
-		EditorContextMenuPlugin::OptionsData context_data;
-		context_data["selected_files"] = p_paths;
-		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(p_popup, EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM, context_data);
+		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(p_popup, EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM, FileSystemDock::_get_context_data(p_paths));
 
 #ifndef DISABLE_DEPRECATED
 		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(p_popup, EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM, p_paths, p_paths, 1000);
@@ -3704,10 +3723,8 @@ void FileSystemDock::_add_create_options(PopupMenu *p_popup, const String &p_bas
 	p_popup->set_item_shortcut(-1, ED_GET_SHORTCUT("filesystem_dock/new_textfile"));
 	// Options for CONTEXT_SLOT_FILESYSTEM_CREATE are added with an offset, to avoid conflicts in case plugins add options for both FileSystem slots.
 	if (EditorContextMenuPluginManager::get_singleton()->has_plugins_for_slot(EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM_CREATE)) {
-		EditorContextMenuPlugin::OptionsData context_data;
-		context_data["base_directory"] = prefix_new ? "res://" : p_base_folder;
-		context_data["needs_prefix"] = prefix_new;
-		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(p_popup, EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM_CREATE, context_data, 500);
+		const String base_directory = prefix_new ? "res://" : p_base_folder;
+		EditorContextMenuPluginManager::get_singleton()->add_options_from_plugins(p_popup, EditorContextMenuPlugin::CONTEXT_SLOT_FILESYSTEM_CREATE, FileSystemDock::_get_context_data_for_create(base_directory, prefix_new), 500);
 
 #ifndef DISABLE_DEPRECATED
 		const PackedStringArray legacy_data = prefix_new ? PackedStringArray() : PackedStringArray{ p_base_folder };
@@ -3978,13 +3995,9 @@ bool FileSystemDock::_handle_custom_context_callback(Ref<InputEvent> p_event, co
 	}
 #endif
 
-	EditorContextMenuPlugin::OptionsData context_data;
-	if (create) {
-		context_data["base_directory"] = base_dir;
-		context_data["needs_prefix"] = p_selected.is_empty();
-	} else {
-		context_data["selected_files"] = p_selected;
-	}
+	EditorContextMenuPlugin::OptionsData context_data = create
+			? FileSystemDock::_get_context_data_for_create(base_dir, p_selected.is_empty())
+			: FileSystemDock::_get_context_data(p_selected);
 	EditorContextMenuPluginManager::get_singleton()->invoke_callback(custom_callback, context_data);
 
 	return true;

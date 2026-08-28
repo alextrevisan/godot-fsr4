@@ -39,6 +39,7 @@
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
 #include "core/templates/fixed_vector.h"
+#include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_device_binds.h"
 #include "servers/rendering/rendering_shader_container.h"
 #include "servers/rendering/shader_include_db.h"
@@ -219,6 +220,27 @@ void RenderingDevice::_free_dependencies(RID p_id) {
 
 		reverse_dependency_map.remove(E);
 	}
+}
+
+void RenderingDevice::_replace_dependency(RID p_dependent, RID p_old_dependency, RID p_new_dependency) {
+	// Remove the edge: p_old_dependency -> p_dependent.
+	{
+		HashSet<RID> *set = dependency_map.getptr(p_old_dependency);
+		if (set) {
+			set->erase(p_dependent);
+		}
+	}
+
+	// Remove the reverse edge: p_dependent -> p_old_dependency.
+	{
+		HashSet<RID> *set = reverse_dependency_map.getptr(p_dependent);
+		if (set) {
+			set->erase(p_old_dependency);
+		}
+	}
+
+	// Add the new edge: p_new_dependency -> p_dependent.
+	_add_dependency(p_dependent, p_new_dependency);
 }
 
 /*******************************/
@@ -834,6 +856,24 @@ Error RenderingDevice::hit_sbt_range_update(RID p_hit_sbt, HitShaderBindingTable
 /**** BUFFER MANAGEMENT ****/
 /***************************/
 
+RDD::MemoryAllocationType RenderingDevice::_get_buffer_alloc_type(bool p_has_initial_data, Thread::ID p_thread_id) const {
+	bool gpu_mappable = false;
+
+	if (p_has_initial_data && driver->has_feature(SUPPORTS_GPU_MAPPABLE_BUFFER)) {
+		// Integrated GPUs have no cost when copying to GPU mappable buffers.
+		if (device.type == RenderingContextDriver::DEVICE_TYPE_INTEGRATED_GPU) {
+			gpu_mappable = true;
+		} else {
+			// Discrete GPUs can have extra cost when copying to GPU mappable buffers. Avoid that work on the render thread.
+			if (p_thread_id != render_thread_id) {
+				gpu_mappable = true;
+			}
+		}
+	}
+
+	return gpu_mappable ? RDD::MEMORY_ALLOCATION_TYPE_GPU_MAPPABLE : RDD::MEMORY_ALLOCATION_TYPE_GPU;
+}
+
 RenderingDevice::Buffer *RenderingDevice::_get_buffer_from_owner(RID p_buffer) {
 	Buffer *buffer = nullptr;
 	if (vertex_buffer_owner.owns(p_buffer)) {
@@ -852,30 +892,41 @@ RenderingDevice::Buffer *RenderingDevice::_get_buffer_from_owner(RID p_buffer) {
 }
 
 Error RenderingDevice::_buffer_initialize(Buffer *p_buffer, Span<uint8_t> p_data, uint32_t p_required_align) {
-	uint32_t transfer_worker_offset;
-	TransferWorker *transfer_worker = _acquire_transfer_worker(p_data.size(), p_required_align, transfer_worker_offset);
-	p_buffer->transfer_worker_index = transfer_worker->index;
+	if (p_buffer->alloc_type == RDD::MEMORY_ALLOCATION_TYPE_GPU_MAPPABLE) {
+		// Copy directly to the buffer if available.
+		uint8_t *data_ptr = driver->buffer_map(p_buffer->driver_id);
+		ERR_FAIL_NULL_V(data_ptr, ERR_CANT_CREATE);
 
-	{
-		MutexLock lock(transfer_worker->operations_mutex);
-		p_buffer->transfer_worker_operation = ++transfer_worker->operations_counter;
+		memcpy(data_ptr, p_data.ptr(), p_data.size());
+
+		driver->buffer_unmap(p_buffer->driver_id);
+	} else {
+		// Otherwise, use a transfer worker.
+		uint32_t transfer_worker_offset;
+		TransferWorker *transfer_worker = _acquire_transfer_worker(p_data.size(), p_required_align, transfer_worker_offset);
+		p_buffer->transfer_worker_index = transfer_worker->index;
+
+		{
+			MutexLock lock(transfer_worker->operations_mutex);
+			p_buffer->transfer_worker_operation = ++transfer_worker->operations_counter;
+		}
+
+		// Copy to the worker's staging buffer.
+		uint8_t *data_ptr = driver->buffer_map(transfer_worker->staging_buffer);
+		ERR_FAIL_NULL_V(data_ptr, ERR_CANT_CREATE);
+
+		memcpy(data_ptr + transfer_worker_offset, p_data.ptr(), p_data.size());
+		driver->buffer_unmap(transfer_worker->staging_buffer);
+
+		// Copy from the staging buffer to the real buffer.
+		RDD::BufferCopyRegion region;
+		region.src_offset = transfer_worker_offset;
+		region.dst_offset = 0;
+		region.size = p_data.size();
+		driver->command_copy_buffer(transfer_worker->command_buffer, transfer_worker->staging_buffer, p_buffer->driver_id, region);
+
+		_release_transfer_worker(transfer_worker);
 	}
-
-	// Copy to the worker's staging buffer.
-	uint8_t *data_ptr = driver->buffer_map(transfer_worker->staging_buffer);
-	ERR_FAIL_NULL_V(data_ptr, ERR_CANT_CREATE);
-
-	memcpy(data_ptr + transfer_worker_offset, p_data.ptr(), p_data.size());
-	driver->buffer_unmap(transfer_worker->staging_buffer);
-
-	// Copy from the staging buffer to the real buffer.
-	RDD::BufferCopyRegion region;
-	region.src_offset = transfer_worker_offset;
-	region.dst_offset = 0;
-	region.size = p_data.size();
-	driver->command_copy_buffer(transfer_worker->command_buffer, transfer_worker->staging_buffer, p_buffer->driver_id, region);
-
-	_release_transfer_worker(transfer_worker);
 
 	return OK;
 }
@@ -1462,7 +1513,9 @@ RID RenderingDevice::storage_buffer_create(uint32_t p_size_bytes, Span<uint8_t> 
 		buffer.usage.set_flag(RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 	}
 
-	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, RDD::MEMORY_ALLOCATION_TYPE_GPU, frames_drawn);
+	buffer.alloc_type = _get_buffer_alloc_type(!p_data.is_empty(), Thread::get_caller_id());
+
+	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, buffer.alloc_type, frames_drawn);
 	ERR_FAIL_COND_V(!buffer.driver_id, RID());
 
 	// Storage buffers are assumed to be mutable.
@@ -3852,7 +3905,10 @@ RID RenderingDevice::vertex_buffer_create(uint32_t p_size_bytes, Span<uint8_t> p
 	if (p_creation_bits.has_flag(BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT)) {
 		buffer.usage.set_flag(RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 	}
-	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, RDD::MEMORY_ALLOCATION_TYPE_GPU, frames_drawn);
+
+	buffer.alloc_type = _get_buffer_alloc_type(!p_data.is_empty(), Thread::get_caller_id());
+
+	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, buffer.alloc_type, frames_drawn);
 	ERR_FAIL_COND_V(!buffer.driver_id, RID());
 
 	// Vertex buffers are assumed to be immutable unless they don't have initial data or they've been marked for storage explicitly.
@@ -4067,7 +4123,10 @@ RID RenderingDevice::index_buffer_create(uint32_t p_index_count, IndexBufferForm
 	if (p_creation_bits.has_flag(BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT)) {
 		index_buffer.usage.set_flag(RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 	}
-	index_buffer.driver_id = driver->buffer_create(index_buffer.size, index_buffer.usage, RDD::MEMORY_ALLOCATION_TYPE_GPU, frames_drawn);
+
+	index_buffer.alloc_type = _get_buffer_alloc_type(!p_data.is_empty(), Thread::get_caller_id());
+
+	index_buffer.driver_id = driver->buffer_create(index_buffer.size, index_buffer.usage, index_buffer.alloc_type, frames_drawn);
 	ERR_FAIL_COND_V(!index_buffer.driver_id, RID());
 
 	// Index buffers are assumed to be immutable unless they don't have initial data.
@@ -4330,7 +4389,10 @@ RID RenderingDevice::uniform_buffer_create(uint32_t p_size_bytes, Span<uint8_t> 
 		// stick to the known/intended use cases and scream if we deviate from it.
 		buffer.usage.clear_flag(RDD::BUFFER_USAGE_TRANSFER_TO_BIT);
 	}
-	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, RDD::MEMORY_ALLOCATION_TYPE_GPU, frames_drawn);
+
+	buffer.alloc_type = _get_buffer_alloc_type(!p_data.is_empty(), Thread::get_caller_id());
+
+	buffer.driver_id = driver->buffer_create(buffer.size, buffer.usage, buffer.alloc_type, frames_drawn);
 	ERR_FAIL_COND_V(!buffer.driver_id, RID());
 
 	// Uniform buffers are assumed to be immutable unless they don't have initial data.
@@ -4809,6 +4871,13 @@ RID RenderingDevice::uniform_set_create(const VectorView<RD::Uniform> &p_uniform
 	uniform_set.acceleration_structures = acceleration_structures;
 	uniform_set.shader_set = p_shader_set;
 	uniform_set.shader_id = p_shader;
+	uniform_set.is_linear_pool = p_linear_pool;
+
+	// Store the original uniforms so the set can be re-created if a texture is replaced.
+	uniform_set.bound_uniforms.resize(uniform_count);
+	for (uint32_t i = 0; i < uniform_count; i++) {
+		uniform_set.bound_uniforms[i] = uniforms[i];
+	}
 
 	RID id = uniform_set_owner.make_rid(uniform_set);
 #ifdef DEV_ENABLED
@@ -7773,6 +7842,128 @@ void RenderingDevice::_free_internal(RID p_id) {
 		ERR_PRINT("Attempted to free invalid ID: " + itos(p_id.get_id()));
 #endif
 	}
+
+	frames_pending_resources_for_processing = uint32_t(frames.size());
+}
+
+void RenderingDevice::texture_replace_rid(RID p_old_texture, RID p_new_texture) {
+	_THREAD_SAFE_METHOD_
+	ERR_FAIL_COND(p_old_texture == p_new_texture);
+
+	Texture *old_texture = texture_owner.get_or_null(p_old_texture);
+	ERR_FAIL_NULL(old_texture);
+	Texture *new_texture = texture_owner.get_or_null(p_new_texture);
+	ERR_FAIL_NULL(new_texture);
+
+	// We must snapshot the set because we'll be mutating the dependency map.
+	LocalVector<RID> dependent_uniform_sets;
+	{
+		HashSet<RID> *deps = dependency_map.getptr(p_old_texture);
+		if (deps) {
+			for (const RID &dep : *deps) {
+				if (uniform_set_owner.owns(dep)) {
+					dependent_uniform_sets.push_back(dep);
+				}
+			}
+		}
+	}
+
+	// For each dependent uniform set, re-create its driver-level descriptor set
+	// with the new texture, then queue the old descriptor set for deferred deletion.
+	for (const RID &us_rid : dependent_uniform_sets) {
+		UniformSet *us = uniform_set_owner.get_or_null(us_rid);
+		ERR_CONTINUE(!us);
+
+		if (us->bound_uniforms.is_empty()) {
+			// This uniform set wasn't created with stored bindings so it can't be patched.
+			free_rid(us_rid);
+			continue;
+		}
+
+		Shader *shader = shader_owner.get_or_null(us->shader_id);
+		if (!shader || !shader->driver_id) {
+			// Shader is gone; the uniform set is orphaned. Free like normal.
+			free_rid(us_rid);
+			continue;
+		}
+
+		// Patch the bound uniforms.
+		bool patched = false;
+		for (uint32_t i = 0; i < us->bound_uniforms.size(); i++) {
+			Uniform &u = us->bound_uniforms[i];
+			uint32_t id_count = u.get_id_count();
+			for (uint32_t j = 0; j < id_count; j++) {
+				if (u.get_id(j) == p_old_texture) {
+					u.set_id(j, p_new_texture);
+					patched = true;
+				}
+			}
+		}
+
+		if (!patched) {
+			// This set didn't actually reference the old texture. Skip.
+			continue;
+		}
+
+		VectorView<Uniform> uniforms_view(us->bound_uniforms.ptr(), us->bound_uniforms.size());
+		RID new_us_rid = uniform_set_create(uniforms_view, us->shader_id, us->shader_set, us->is_linear_pool);
+
+		if (new_us_rid.is_null()) {
+			ERR_PRINT("Failed to re-create uniform set during texture replacement.");
+			continue;
+		}
+
+		UniformSet *new_us = uniform_set_owner.get_or_null(new_us_rid);
+		ERR_CONTINUE(!new_us);
+
+		// Create a temporary UniformSet with only the driver_id so it gets freed.
+		UniformSet old_us_for_disposal;
+		old_us_for_disposal.driver_id = us->driver_id;
+		frames[frame].uniform_sets_to_dispose_of.push_back(old_us_for_disposal);
+
+		// Copy new data in.
+		us->driver_id = new_us->driver_id;
+		us->format = new_us->format;
+		us->attachable_textures = new_us->attachable_textures;
+		us->draw_trackers = new_us->draw_trackers;
+		us->draw_trackers_usage = new_us->draw_trackers_usage;
+		us->untracked_usage = new_us->untracked_usage;
+		us->shared_textures_to_update = new_us->shared_textures_to_update;
+		us->pending_clear_textures = new_us->pending_clear_textures;
+		us->bound_uniforms = new_us->bound_uniforms;
+
+		// Replace old texture dependency with new.
+		_replace_dependency(us_rid, p_old_texture, p_new_texture);
+
+		// Update the UniformSetCacheRD entry if this set was created through the cache.
+		UniformSetCacheRD *const uniform_set_cache = UniformSetCacheRD::get_singleton();
+		if (uniform_set_cache->is_cache_invalidation_callback(us->invalidated_callback)) {
+			uniform_set_cache->texture_replaced_in_uniform_set(us->invalidated_callback_userdata, p_old_texture, p_new_texture);
+		}
+
+		// Since the real driver id is used by the original set, clear the temporary set's driver id.
+		new_us->driver_id = RDD::UniformSetID();
+
+		// Remove its dependency entries and free the temporary RID.
+		HashMap<RID, HashSet<RID>>::Iterator rev_it = reverse_dependency_map.find(new_us_rid);
+		if (rev_it) {
+			for (const RID &dep_on : rev_it->value) {
+				HashSet<RID> *fwd = dependency_map.getptr(dep_on);
+				if (fwd) {
+					fwd->erase(new_us_rid);
+				}
+			}
+			reverse_dependency_map.remove(rev_it);
+		}
+		HashMap<RID, HashSet<RID>>::Iterator fwd_it = dependency_map.find(new_us_rid);
+		if (fwd_it) {
+			dependency_map.remove(fwd_it);
+		}
+
+		uniform_set_owner.free(new_us_rid);
+	}
+
+	free_rid(p_old_texture);
 
 	frames_pending_resources_for_processing = uint32_t(frames.size());
 }

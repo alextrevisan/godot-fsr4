@@ -92,13 +92,7 @@ void EditorDebuggerRemoteObjects::_get_property_list(List<PropertyInfo> *p_list)
 }
 
 void EditorDebuggerRemoteObjects::set_property_field(const StringName &p_property, const Variant &p_value, const String &p_field) {
-	// Ignore the field with arrays and dictionaries, as they are passed whole when edited.
-	Variant::Type type = p_value.get_type();
-	if (type == Variant::ARRAY || type == Variant::DICTIONARY) {
-		_set_impl(p_property, p_value, "");
-	} else {
-		_set_impl(p_property, p_value, p_field);
-	}
+	_set_impl(p_property, p_value, p_field);
 }
 
 String EditorDebuggerRemoteObjects::get_title() {
@@ -148,7 +142,7 @@ EditorDebuggerInspector::~EditorDebuggerInspector() {
 
 void EditorDebuggerInspector::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("object_selected", PropertyInfo(Variant::INT, "id")));
-	ADD_SIGNAL(MethodInfo("objects_edited", PropertyInfo(Variant::ARRAY, "ids"), PropertyInfo(Variant::STRING, "property"), PropertyInfo("value"), PropertyInfo(Variant::STRING, "field")));
+	ADD_SIGNAL(MethodInfo("objects_edited", PropertyInfo(Variant::STRING, "property"), PropertyInfo(Variant::DICTIONARY, "values", PROPERTY_HINT_DICTIONARY_TYPE, "int;Variant"), PropertyInfo(Variant::STRING, "field")));
 	ADD_SIGNAL(MethodInfo("object_property_updated", PropertyInfo(Variant::INT, "id"), PropertyInfo(Variant::STRING, "property")));
 }
 
@@ -345,6 +339,8 @@ EditorDebuggerRemoteObjects *EditorDebuggerInspector::set_objects(const Array &p
 				}
 			}
 		}
+	} else {
+		has_custom_class = false;
 	}
 
 	if (!has_custom_class && class_name != SNAME("Object")) {
